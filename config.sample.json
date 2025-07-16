@@ -1,0 +1,3 @@
+{
+  "fields": ["patient_name", "email", "visit.id"]
+}

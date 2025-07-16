@@ -1,0 +1,26 @@
+"""
+AWS Lambda entrypoint for Anymouse anonymization service.
+Dispatches requests to anonymize or deanonymize functions.
+"""
+
+import json
+from .anonymize import anonymize_payload
+from .deanonymize import deanonymize_payload
+
+def lambda_handler(event, context):
+    """
+    AWS Lambda handler. Expects event with 'action' key:
+      - action: 'anonymize' or 'deanonymize'
+      - payload: dict
+      - config: dict (optional)
+    """
+    action = event.get("action")
+    payload = event.get("payload")
+    config = event.get("config", {})
+
+    if action == "anonymize":
+        return {"anonymized": anonymize_payload(payload, config)}
+    elif action == "deanonymize":
+        return {"deanonymized": deanonymize_payload(payload, config)}
+    else:
+        return {"error": "Invalid action"}, 400
