@@ -1,10 +1,12 @@
-# **Requirements Document: Anonymization Service (AWS Lambda)**
+# **Requirements Document: Anymouse Anonymization Service (AWS Lambda)**
 
 [See the discussion link](https://chatgpt.com/c/687812c9-c764-800e-b8c9-4c4cf9949ad6)
 
+---
+
 ## **Purpose**
 
-Provide a stateless microservice to anonymize and deanonymize sensitive data passing through administrative/accounting integrations (Jane EMR, Shopify, QBO, etc.), via tokenization and lookup, suitable for regulatory compliance and minimum patient identification risk.
+Provide a stateless microservice to anonymize and deanonymize sensitive data passing through administrative/accounting integrations (Jane EMR, Shopify, QBO, etc.), or semi-structured communication (emails, notes), via tokenization and lookup. The service must support regulatory compliance and minimize patient identification risk, including in contexts with multiple personal names.
 
 ---
 
@@ -12,35 +14,36 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
 ### 1. **Tokenization / Anonymization**
 
-* **Input:** Raw data payloads (JSON/CSV) containing potentially identifying fields.
+* **Input:** Raw data payloads (JSON/CSV/email text) containing potentially identifying fields or entities (names, emails, dates, etc.).
 * **Process:**
 
-  * Extract target fields (e.g., patient name, email, address, invoice IDs, etc.) using field config/regex.
-  * Replace these fields with unique, deterministic tokens (e.g., UUIDv4, hash, or salted hash).
+  * Extract target fields/entities (e.g., patient name, email, address, invoice IDs) using a combination of field config, regex, and Named Entity Recognition (NER).
+  * For free-form text (such as emails), detect personal names, organizations, and other entities using NER (e.g., via spaCy, AWS Comprehend, or similar).
+  * Replace detected entities with unique, deterministic tokens (e.g., `[name1]`, `[name2]`, etc.; tokens may be UUIDv4, hash, or salted hash under the hood).
   * Store a mapping (token → real value) in a secure, isolated data store (e.g., DynamoDB, encrypted S3, or RDS).
-  * Non-identifying fields pass through unchanged.
-* **Output:** Anonymized payload, suitable for downstream integration.
+  * Non-identifying fields/entities pass through unchanged.
+* **Output:** An anonymized manifest (see below), suitable for downstream integration.
 
 ### 2. **Lookup / Deanonymization**
 
-* **Input:** Payloads with tokens in place of real values.
+* **Input:** Payloads or messages with tokens in place of real values and a corresponding tokens dictionary.
 * **Process:**
 
-  * Identify token fields (matching token pattern/namespace).
+  * Identify token placeholders in the message/payload.
   * Lookup token mappings and replace with the original value.
-* **Output:** Deanonymized payload (e.g., for internal audit, support).
+* **Output:** Deanonymized (rehydrated) message or payload.
 
 ### 3. **Pre/Post-Processing Hooks**
 
-* **Extraction:** Configurable logic to identify and extract fields for anonymization, including support for:
+* **Extraction:** Configurable logic to identify and extract fields or entities for anonymization, including support for:
 
-  * Field mappings (simple: “patient\_name” → tokenize; complex: nested/array fields).
-  * Regex-based matching for semi-structured data.
+  * Field mappings for structured data (e.g., `patient_name` → tokenize).
+  * Regex and NER for semi-structured/free-form data (e.g., “Jane Doe,” “Dr. McCulloch”).
 * **Reinjection:** Map tokens back to original values using stored lookup for specific flows.
 
 ### 4. **Stateless Lambda Operation**
 
-* All per-request context (e.g., which fields to tokenize, mapping keys) must be passed as part of the request or retrievable from config storage (e.g., SSM Parameter Store).
+* All per-request context (e.g., which fields/entities to tokenize, mapping keys) must be passed as part of the request or retrievable from config storage (e.g., SSM Parameter Store).
 
 ---
 
@@ -51,20 +54,17 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
   * All mapping storage must be encrypted at rest and in transit.
   * Tokens must not be guessable/reversible without access to mapping store.
   * Service must support per-tenant or per-domain isolation (multi-tenant safe).
-
 * **Performance:**
 
   * Must handle \~10–100 requests/sec with sub-second latency.
   * Must scale with AWS Lambda’s automatic scaling.
-
 * **Auditing/Logging:**
 
   * All anonymization/deanonymization requests are logged (excluding sensitive payload).
   * Audit logs must not contain raw PII.
-
 * **Configurable Field List:**
 
-  * Field mappings and regexes are externally configurable (JSON, YAML, or fetched from S3/SSM).
+  * Field mappings, regexes, and NER models are externally configurable (JSON, YAML, or fetched from S3/SSM).
 
 ---
 
@@ -74,56 +74,115 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
 * `POST /anonymize`
 
-  * Input: `{ payload: <data>, config: <optional override> }`
-  * Output: `{ anonymized: <payload>, mapping_keys: <optional> }`
+  * **Input:**
+
+    ```json
+    {
+      "payload": {
+        "name": "Alice",
+        "email": "alice@email.com",
+        "date": "2023-10-01"
+      },
+      "config": {
+        "fields": ["name", "email", "date"]
+      }
+    }
+    ```
+
+    or, for free-form text:
+
+    ```json
+    {
+      "payload": "Hello,\n\nI have a question for Dr. McCulloch regarding my prescription. ...\nThank you,\nJane Smith"
+    }
+    ```
+
+  * **Output:**
+
+    ```json
+    {
+      "message": "Hello,\n\nI have a question for [name1] regarding my prescription. ...\nThank you,\n[name2]",
+      "tokens": {
+        "name1": "Dr. McCulloch",
+        "name2": "Jane Smith"
+      },
+      "fields": ["PERSON"]
+    }
+    ```
+
+    * `message`: String template with token placeholders.
+    * `tokens`: Dictionary mapping placeholder names to real values.
+    * `fields`: List of fields/entities processed or available for tokenization.
+
 * `POST /deanonymize`
 
-  * Input: `{ payload: <data>, mapping_keys: <optional> }`
-  * Output: `{ deanonymized: <payload> }`
+  * **Input:**
+
+    ```json
+    {
+      "message": "Hello,\n\nI have a question for [name1] regarding my prescription. ...\nThank you,\n[name2]",
+      "tokens": {
+        "name1": "Dr. McCulloch",
+        "name2": "Jane Smith"
+      }
+    }
+    ```
+
+  * **Output:**
+
+    ```json
+    {
+      "message": "Hello,\n\nI have a question for Dr. McCulloch regarding my prescription. ...\nThank you,\nJane Smith"
+    }
+    ```
+
 * `POST /config/test`
 
   * (Validate/test a new extraction/config payload.)
 
-### **Payload Example**
+---
 
-#### Anonymization Request
+### **Email Example Use Case**
+
+**Input email:**
+
+```text
+Jane Doe<my.email@emailhost.com>
+Mon, Jan 01, 12:45 PM
+to me
+
+Hello,
+
+I have a question for Dr. McCulloch regarding my pms-progesterone prescription. During our last appt, she mentioned the option of switching to the oral compounded version with the help of an MD she knows who could write the prescription. I am just completing my first 14 day course of the vaginal suppositories, and while it is going well, I am hoping to switch to the oral version before my next cycle of the prescription (roughly in 21 days).
+
+I was wondering if she is comfortable sharing the name of this doctor so I can start with the oral version next cycle, or if she would rather me book an appointment.
+
+Thank you,
+Jane Smith
+Sent from my iPhone
+```
+
+**Expected anonymized output:**
 
 ```json
 {
-  "payload": {
-    "patient_name": "Jane Doe",
-    "email": "jane@example.com",
-    "visit": {
-      "date": "2024-01-01",
-      "id": "abc-123"
-    }
+  "message": "Jane Doe<my.email@emailhost.com>\nMon, Jan 01, 12:45 PM\nto me\n\nHello,\n\nI have a question for [name1] regarding my pms-progesterone prescription. ...\nThank you,\n[name2]\nSent from my iPhone",
+  "tokens": {
+    "name1": "Dr. McCulloch",
+    "name2": "Jane Smith"
   },
-  "config": {
-    "fields": ["patient_name", "email", "visit.id"]
-  }
+  "fields": ["PERSON"]
 }
 ```
 
-#### Anonymized Response
-
-```json
-{
-  "anonymized": {
-    "patient_name": "token:8ac0...",
-    "email": "token:1d3c...",
-    "visit": {
-      "date": "2024-01-01",
-      "id": "token:ab9a..."
-    }
-  }
-}
-```
+* The Lambda must tokenize all detected PERSON entities, supporting emails where multiple distinct names appear (sender, recipient, doctor, patient, etc.).
 
 ---
 
 ## **Implementation Constraints**
 
-* **Language:** Node.js or Python (best AWS Lambda support).
+* **Language:** Python (preferred for AWS Lambda, robust NER/NLP library support).
+* **Entity Extraction:** Use spaCy (with English NER model) or AWS Comprehend for Named Entity Recognition, falling back to regexes for headers if needed.
 * **Storage:** DynamoDB (preferred for low-latency key/value mapping).
 * **Deployment:** AWS Lambda + API Gateway; configuration in S3 or SSM.
 * **Access:** Auth via AWS IAM or JWT (depending on environment).
@@ -135,13 +194,18 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 * What’s the retention policy for mapping tables?
 * Should we support batch/bulk anonymization?
 * Do we need audit “reversal” (e.g., to revoke or invalidate tokens)?
-* Multi-tenant: field mapping and token namespace per-tenant?
+* Multi-tenant: field/entity mapping and token namespace per-tenant?
 * API Gateway: private (VPC) or public endpoint?
 
 ---
 
 **Next Steps:**
 
-* Confirm field extraction spec and sample payloads for each integration.
+* Confirm field/entity extraction spec and sample payloads for each integration.
 * Decide on retention/isolation policy for mapping storage.
 * Finalize config interface (S3/SSM/inline).
+* Prototype with spaCy and evaluate Lambda deployment size/performance.
+
+---
+
+Let me know if you need a separate “Glossary” section, further email scenarios, or implementation samples!
