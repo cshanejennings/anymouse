@@ -1,6 +1,9 @@
 """Core anonymization logic for structured payloads and free-form text."""
 import re
 import uuid
+import copy
+import json
+import uuid  # Not used now, but keep if needed for other tokens
 
 try:
     import spacy
@@ -16,17 +19,28 @@ except ImportError:
 
 
 def anonymize_payload(payload: dict, config: dict) -> dict:
-    """Replace target fields with unique tokens. Store mapping in persistent storage (TODO)."""
-    # TODO: Implement recursive field extraction and token replacement.
-    # For now, simple shallow mapping for demonstration.
-    result = payload.copy()
+    """Replace target fields with unique tokens in a nested payload."""
     fields = config.get("fields", [])
-    for field in fields:
-        if field in result:
-            # Replace with a UUID token.
-            result[field] = f"token:{uuid.uuid4().hex}"
-            # TODO: Store mapping (token -> real value) in DynamoDB.
-    return result
+    result = copy.deepcopy(payload)  # Deep copy to avoid modifying original
+    tokens = {}
+    field_index = 1
+    fields_set = set(fields)  # For quick lookup
+
+    def recurse(current: dict, path: str = ""):
+        nonlocal field_index
+        for key in list(current.keys()):  # Avoid runtime errors during iteration
+            full_path = f"{path}.{key}" if path else key
+            if full_path in fields_set:
+                placeholder = f"[name{field_index}]"
+                tokens[placeholder] = current[key]
+                current[key] = placeholder
+                field_index += 1
+            elif isinstance(current[key], dict):
+                recurse(current[key], full_path if path else key)
+
+    recurse(result)
+    message = json.dumps(result)  # Stringify as per edge case format
+    return {"message": message, "tokens": tokens, "fields": fields}
 
 
 _STOPWORDS = {

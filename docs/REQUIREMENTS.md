@@ -19,10 +19,10 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
   * Extract target fields/entities (e.g., patient name, email, address, invoice IDs) using a combination of field config, regex, and Named Entity Recognition (NER).
   * For free-form text (such as emails), detect personal names, organizations, and other entities using NER (e.g., via spaCy, AWS Comprehend, or similar).
-  * Replace detected entities with unique, deterministic tokens (e.g., `[name1]`, `[name2]`, etc.; tokens may be UUIDv4, hash, or salted hash under the hood).
-  * Store a mapping (token → real value) in a secure, isolated data store (e.g., DynamoDB, encrypted S3, or RDS).
+  * Replace detected entities with unique, deterministic tokens (e.g., `[name1]`, `[name2]`, etc.).
+  * **Stateless:** The mapping of tokens to original values is included in the response JSON; the service retains no mapping or state after the response.
   * Non-identifying fields/entities pass through unchanged.
-* **Output:** An anonymized manifest (see below), suitable for downstream integration.
+* **Output:** An anonymized manifest (see below), suitable for downstream integration, and designed so the structure could easily be adapted to an array-of-objects pattern for future batch support.
 
 ### 2. **Lookup / Deanonymization**
 
@@ -30,7 +30,8 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 * **Process:**
 
   * Identify token placeholders in the message/payload.
-  * Lookup token mappings and replace with the original value.
+  * Use the provided tokens dictionary to replace tokens with original values.
+  * **Stateless:** No server-side lookup; mapping is fully client-provided.
 * **Output:** Deanonymized (rehydrated) message or payload.
 
 ### 3. **Pre/Post-Processing Hooks**
@@ -39,11 +40,11 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
   * Field mappings for structured data (e.g., `patient_name` → tokenize).
   * Regex and NER for semi-structured/free-form data (e.g., “Jane Doe,” “Dr. McCulloch”).
-* **Reinjection:** Map tokens back to original values using stored lookup for specific flows.
+* **Reinjection:** Map tokens back to original values using only client-provided mappings.
 
 ### 4. **Stateless Lambda Operation**
 
-* All per-request context (e.g., which fields/entities to tokenize, mapping keys) must be passed as part of the request or retrievable from config storage (e.g., SSM Parameter Store).
+* **Stateless:** The Lambda function stores nothing between requests; all mapping data is contained in the response and must be managed by the client.
 
 ---
 
@@ -51,17 +52,16 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
 * **Security:**
 
-  * All mapping storage must be encrypted at rest and in transit.
-  * Tokens must not be guessable/reversible without access to mapping store.
-  * Service must support per-tenant or per-domain isolation (multi-tenant safe).
+  * Lambda must require an API key, IAM role, or other best-practice authorization to prevent unauthorized use.
+  * No mapping or token data is ever stored server-side.
 * **Performance:**
 
   * Must handle \~10–100 requests/sec with sub-second latency.
   * Must scale with AWS Lambda’s automatic scaling.
 * **Auditing/Logging:**
 
-  * All anonymization/deanonymization requests are logged (excluding sensitive payload).
-  * Audit logs must not contain raw PII.
+  * Only minimal access logs (timestamp, status, possibly origin IP).
+  * Audit logs must not contain any payload, PII, tokens, or mappings.
 * **Configurable Field List:**
 
   * Field mappings, regexes, and NER models are externally configurable (JSON, YAML, or fetched from S3/SSM).
@@ -96,7 +96,6 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
       "payload": "Hello,\n\nI have a question for Dr. McCulloch regarding my prescription. ...\nThank you,\nJane Smith"
     }
     ```
-
   * **Output:**
 
     ```json
@@ -127,7 +126,6 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
       }
     }
     ```
-
   * **Output:**
 
     ```json
@@ -146,17 +144,14 @@ Provide a stateless microservice to anonymize and deanonymize sensitive data pas
 
 **Input email:**
 
-```text
+```
 Jane Doe<my.email@emailhost.com>
 Mon, Jan 01, 12:45 PM
 to me
 
 Hello,
 
-I have a question for Dr. McCulloch regarding my pms-progesterone prescription. During our last appt, she mentioned the option of switching to the oral compounded version with the help of an MD she knows who could write the prescription. I am just completing my first 14 day course of the vaginal suppositories, and while it is going well, I am hoping to switch to the oral version before my next cycle of the prescription (roughly in 21 days).
-
-I was wondering if she is comfortable sharing the name of this doctor so I can start with the oral version next cycle, or if she would rather me book an appointment.
-
+I have a question for Dr. McCulloch regarding my pms-progesterone prescription. ...
 Thank you,
 Jane Smith
 Sent from my iPhone
@@ -183,29 +178,26 @@ Sent from my iPhone
 
 * **Language:** Python (preferred for AWS Lambda, robust NER/NLP library support).
 * **Entity Extraction:** Use spaCy (with English NER model) or AWS Comprehend for Named Entity Recognition, falling back to regexes for headers if needed.
-* **Storage:** DynamoDB (preferred for low-latency key/value mapping).
+* **Storage:** No data stored server-side; all mapping is handled by the client.
 * **Deployment:** AWS Lambda + API Gateway; configuration in S3 or SSM.
-* **Access:** Auth via AWS IAM or JWT (depending on environment).
+* **Access:** Auth via AWS IAM, API key, or similar; do not expose endpoint without protection.
 
 ---
 
 ## **Edge Cases & Open Questions**
 
-* What’s the retention policy for mapping tables?
-* Should we support batch/bulk anonymization?
-* Do we need audit “reversal” (e.g., to revoke or invalidate tokens)?
-* Multi-tenant: field/entity mapping and token namespace per-tenant?
-* API Gateway: private (VPC) or public endpoint?
+* What is the best-practice method for Lambda API authorization? (API key, IAM, Cognito, etc.)
+* Bulk/batch: Not supported initially, but all output signatures should be array-friendly for future extension.
+* No data retention: All mappings/tokens must be returned to and managed by the client; no server-side persistence.
+* “Multi-tenant” concerns removed: Each invocation is stateless and does not need to distinguish between clients internally.
 
 ---
 
 **Next Steps:**
 
 * Confirm field/entity extraction spec and sample payloads for each integration.
-* Decide on retention/isolation policy for mapping storage.
+* Decide on API authorization mechanism for Lambda.
 * Finalize config interface (S3/SSM/inline).
 * Prototype with spaCy and evaluate Lambda deployment size/performance.
 
 ---
-
-Let me know if you need a separate “Glossary” section, further email scenarios, or implementation samples!
