@@ -78,51 +78,56 @@ def _regex_name_pattern() -> re.Pattern:
 
 
 def anonymize_text(text: str) -> dict:
-    """Anonymize PERSON names in free-form text.
+    """Anonymize PERSON, ORG, GPE, and DATE entities in free-form text.
 
     Parameters
     ----------
     text: str
-        Input text possibly containing names.
+        Input text possibly containing entities.
 
     Returns
     -------
     dict with keys:
-        - message: text with names replaced by placeholders
-        - tokens: mapping from placeholder to original name
-        - fields: list of fields anonymized (always ["PERSON"])
+        - message: text with entities replaced by placeholders
+        - tokens: mapping from placeholder to original entity
+        - fields: list of entity types anonymized
     """
+    entity_types = ["PERSON", "ORG", "GPE", "DATE"]  # Supported types
+    type_prefixes = {"PERSON": "name", "ORG": "org", "GPE": "loc", "DATE": "date"}
     if _SPACY_AVAILABLE:
         doc = _NLP(text)
-        entities = [(ent.start_char, ent.end_char, ent.text) for ent in doc.ents if ent.label_ == "PERSON"]
+        entities = [(ent.start_char, ent.end_char, ent.text, ent.label_) for ent in doc.ents if ent.label_ in entity_types]
     else:
+        # Fallback to regex for PERSON only
         pattern = _regex_name_pattern()
         entities = []
         for match in pattern.finditer(text):
             name = match.group(0)
             if name in _STOPWORDS:
                 continue
-            entities.append((match.start(), match.end(), name))
+            entities.append((match.start(), match.end(), name, "PERSON"))
 
     if not entities:
-        return {"message": text, "tokens": {}, "fields": ["PERSON"]}
+        return {"message": text, "tokens": {}, "fields": entity_types}
 
-    # Replace from left to right using mapping of unique names to placeholders
-    entities.sort(key=lambda x: x[0])
-    mapping = {}
+    # Replace from left to right, assigning unique placeholders by type
+    entities.sort(key=lambda x: x[0])  # Sort by start position
+    type_counters = {t: 1 for t in entity_types}  # e.g., {"PERSON": 1, "ORG": 1, ...}
+    mapping = {}  # entity_text -> placeholder
     result_parts = []
     last = 0
-    for start, end, name in entities:
+    for start, end, entity_text, entity_type in entities:
         result_parts.append(text[last:start])
-        if name not in mapping:
-            placeholder = f"[name{len(mapping)+1}]"
-            mapping[name] = placeholder
+        if entity_text not in mapping:
+            prefix = type_prefixes[entity_type]
+            placeholder = f"[{prefix}{type_counters[entity_type]}]"
+            mapping[entity_text] = placeholder
+            type_counters[entity_type] += 1
         else:
-            placeholder = mapping[name]
+            placeholder = mapping[entity_text]
         result_parts.append(placeholder)
         last = end
     result_parts.append(text[last:])
 
-    tokens = {placeholder: name for name, placeholder in mapping.items()}
-    return {"message": "".join(result_parts), "tokens": tokens, "fields": ["PERSON"]}
-
+    tokens = {placeholder: entity_text for entity_text, placeholder in mapping.items()}
+    return {"message": "".join(result_parts), "tokens": tokens, "fields": entity_types}

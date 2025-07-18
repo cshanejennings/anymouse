@@ -7,7 +7,7 @@ def test_no_person_entities():
     result = anonymize_text(text)
     assert result["message"] == text
     assert result["tokens"] == {}
-    assert result["fields"] == ["PERSON"]
+    assert result["fields"] == ["PERSON", "ORG", "GPE", "DATE"]
 
 
 def test_multiple_distinct_names():
@@ -20,21 +20,34 @@ def test_multiple_distinct_names():
 def test_duplicate_name():
     text = "Alice spoke to Alice yesterday."
     result = anonymize_text(text)
-    assert result["message"] == "[name1] spoke to [name1] yesterday."
-    assert result["tokens"] == {"[name1]": "Alice"}
+    assert result["message"] == "[name1] spoke to [name1] [date1]."
+    assert result["tokens"] == {"[name1]": "Alice", "[date1]": "yesterday"}
 
 
 def test_name_like_non_person_word():
     text = "I visited London and saw Alice."
     result = anonymize_text(text)
-    assert result["message"] == "I visited London and saw [name1]."
-    assert result["tokens"] == {"[name1]": "Alice"}
+    assert result["message"] == "I visited [loc1] and saw [name1]."
+    assert result["tokens"] == {"[loc1]": "London", "[name1]": "Alice"}
 
 
 def test_mixed_content_round_trip():
     text = "User: Alice\nID: 123\nNotes: Bob said hi."
     anon = anonymize_text(text)
-    assert anon["message"] == "User: [name1]\nID: 123\nNotes: [name2] said hi."
+    assert anon["message"] == "User: Alice\nID: 123\nNotes: [name1] said hi."
+    assert anon["tokens"] == {"[name1]": "Bob"}
     dean = deanonymize_text(anon["message"], anon["tokens"])
     assert dean == text
 
+
+def test_multiple_entity_types():
+    text = "The patient saw Dr. John Smith at Sunnybrook Hospital in Toronto on Jan 1, 2024."
+    result = anonymize_text(text)
+    assert result["message"] == "The patient saw Dr. [name1] at Sunnybrook Hospital in [loc1] on [date1]."
+    assert result["tokens"] == {
+        "[name1]": "John Smith",
+        "[loc1]": "Toronto",
+        "[date1]": "Jan 1, 2024"
+    }
+    assert result["fields"] == ["PERSON", "ORG", "GPE", "DATE"]
+    

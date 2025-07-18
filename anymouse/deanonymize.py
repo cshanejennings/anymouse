@@ -50,11 +50,10 @@ def deanonymize_text(message: str, tokens: dict) -> str:
     if not tokens:
         return message
 
-    pattern = re.compile(r"\[name\d+\]")
+    pattern = re.compile(r"\[(name|org|loc|date)\d+\]")  # Matches all placeholder types
 
     def repl(match: re.Match) -> str:
         placeholder = match.group(0)
         return tokens.get(placeholder, placeholder)
 
     return pattern.sub(repl, message)
-
