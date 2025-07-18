@@ -73,3 +73,24 @@ def test_lambda_handler_logging(mock_log):
     assert "source_ip=192.168.1.1" in formatted_log
     assert "Alice" not in formatted_log  # No PII
     assert "test-api-key-123" not in formatted_log  # No sensitive headers
+
+def test_config_test_endpoint():
+    event = {
+        "action": "config_test",
+        "config": {"fields": ["patient_name", "appointment.doctor"]},
+        "headers": {"X-API-Key": "test-api-key-123"}
+    }
+    response = lambda_handler(event, {})
+    assert response["status"] == "success"
+    assert response["config"] == {"fields": ["patient_name", "appointment.doctor"]}
+    assert response["statusCode"] == 200
+
+    # Invalid config
+    invalid_event = {
+        "action": "config_test",
+        "config": {"fields": "not-a-list"},
+        "headers": {"X-API-Key": "test-api-key-123"}
+    }
+    invalid_response = lambda_handler(invalid_event, {})
+    assert invalid_response["error"].startswith("Invalid config: ")
+    assert invalid_response["statusCode"] == 400

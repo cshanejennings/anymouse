@@ -1,6 +1,6 @@
 """
 AWS Lambda entrypoint for Anymouse anonymization service.
-Dispatches requests to anonymize or deanonymize functions.
+Dispatches requests to anonymize, deanonymize, or test config.
 """
 import json
 import logging
@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 def lambda_handler(event, context):
     """
     AWS Lambda handler. Expects event with 'action' key:
-      - action: 'anonymize' or 'deanonymize'
-      - payload: dict
-      - config: dict (optional)
+      - action: 'anonymize', 'deanonymize', or 'config_test'
+      - payload: dict (for anonymize/deanonymize)
+      - config: dict (optional for anonymize/deanonymize, required for config_test)
       - headers: dict with 'X-API-Key' (required)
     """
     # Check API key
@@ -44,6 +44,10 @@ def lambda_handler(event, context):
     elif action == "deanonymize":
         response = {"deanonymized": deanonymize_payload(payload, config), "statusCode": 200}
         logger.info("action=deanonymize status=200 source_ip=%s", event.get("requestContext", {}).get("identity", {}).get("sourceIp", "unknown"))
+        return response
+    elif action == "config_test":
+        response = {"status": "success", "config": config, "statusCode": 200}
+        logger.info("action=config_test status=200 source_ip=%s", event.get("requestContext", {}).get("identity", {}).get("sourceIp", "unknown"))
         return response
     else:
         logger.info("action=invalid status=400 source_ip=%s", event.get("requestContext", {}).get("identity", {}).get("sourceIp", "unknown"))
