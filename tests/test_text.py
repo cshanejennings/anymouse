@@ -43,11 +43,11 @@ def test_mixed_content_round_trip():
 def test_multiple_entity_types():
     text = "The patient saw Dr. John Smith at Sunnybrook Hospital in Toronto on Jan 1, 2024."
     result = anonymize_text(text)
-    assert result["message"] == "The patient saw Dr. [name1] at Sunnybrook Hospital in [loc1] on [date1]."
+    assert result["message"] == "The patient saw [name1] at [org1] in [loc1] on [date1]."
     assert result["tokens"] == {
-        "[name1]": "John Smith",
+        "[name1]": "Dr. John Smith",
+        "[org1]": "Sunnybrook Hospital",
         "[loc1]": "Toronto",
         "[date1]": "Jan 1, 2024"
     }
     assert result["fields"] == ["PERSON", "ORG", "GPE", "DATE"]
-    
