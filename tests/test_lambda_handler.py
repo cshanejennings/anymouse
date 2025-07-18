@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 import pytest
 from anymouse.lambda_handler import lambda_handler
@@ -94,3 +95,21 @@ def test_config_test_endpoint():
     invalid_response = lambda_handler(invalid_event, {})
     assert invalid_response["error"].startswith("Invalid config: ")
     assert invalid_response["statusCode"] == 400
+
+@patch("anymouse.config.boto3.client")
+def test_lambda_handler_s3_config(mock_boto_client):
+    mock_s3_config = {
+        "Body": type('obj', (), {'read': lambda self: json.dumps({"fields": ["name"]}).encode('utf-8')})()
+    }
+    mock_boto_client.return_value.get_object.return_value = mock_s3_config
+    
+    event = {
+        "action": "anonymize",
+        "payload": {"name": "Alice"},
+        "config_source": {"s3": {"bucket": "my-bucket", "key": "config.json"}},
+        "headers": {"X-API-Key": "test-api-key-123"}
+    }
+    response = lambda_handler(event, {})
+    assert "anonymized" in response
+    assert response["statusCode"] == 200
+    assert response["anonymized"]["tokens"] == {"[name1]": "Alice"}
