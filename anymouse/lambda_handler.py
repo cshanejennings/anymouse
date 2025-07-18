@@ -14,6 +14,7 @@ Dispatches requests to anonymize or deanonymize functions.
 import json
 from .anonymize import anonymize_payload
 from .deanonymize import deanonymize_payload
+from .config import validate_config
 
 def lambda_handler(event, context):
     """
@@ -29,10 +30,15 @@ def lambda_handler(event, context):
     if api_key != "test-api-key-123":  # Hardcoded for testing; use SSM in prod
         return {"error": "Missing or invalid API key", "statusCode": 401}
     
+    # Validate config
+    try:
+        config = validate_config(event.get("config", {}))
+    except ValueError as e:
+        return {"error": f"Invalid config: {str(e)}", "statusCode": 400}
+
     action = event.get("action")
     payload = event.get("payload")
-    config = event.get("config", {})
-
+    
     if action == "anonymize":
         return {"anonymized": anonymize_payload(payload, config), "statusCode": 200}
     elif action == "deanonymize":

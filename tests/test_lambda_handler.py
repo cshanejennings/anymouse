@@ -34,3 +34,14 @@ def test_lambda_handler_authorization():
     invalid_key_response = lambda_handler(invalid_key_event, valid_context)
     assert invalid_key_response["error"] == "Missing or invalid API key"
     assert invalid_key_response["statusCode"] == 401
+
+def test_lambda_handler_invalid_config():
+    event = {
+        "action": "anonymize",
+        "payload": {"name": "Alice"},
+        "config": {"fields": "not-a-list"},
+        "headers": {"X-API-Key": "test-api-key-123"}
+    }
+    response = lambda_handler(event, {})
+    assert response["error"].startswith("Invalid config: ")
+    assert response["statusCode"] == 400
