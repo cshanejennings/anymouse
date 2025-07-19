@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_lambda_handler.py -v)",
+      "Bash(python3 -m pytest tests/test_lambda_handler.py -v)",
+      "Bash(pip install:*)",
+      "Bash(chmod:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Anymouse anonymization service
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        PYTHONPATH: /var/task
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage
+
+Resources:
+  AnymouseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "anymouse-${Stage}"
+      PackageType: Image
+      ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/anymouse:latest"
+      Architectures:
+        - x86_64
+      Events:
+        AnonymizeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AnymouseApi
+            Path: /anonymize
+            Method: post
+        DeanonymizeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AnymouseApi
+            Path: /deanonymize
+            Method: post
+        ConfigTestApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AnymouseApi
+            Path: /config/test
+            Method: post
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/anymouse/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "arn:aws:s3:::anymouse-config-${Stage}/*"
+
+  AnymouseApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "anymouse-api-${Stage}"
+      StageName: !Ref Stage
+      Cors:
+        AllowMethods: "'POST, OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          Description: Usage plan for Anymouse API
+          Quota:
+            Limit: 10000
+            Period: MONTH
+          Throttle:
+            BurstLimit: 100
+            RateLimit: 50
+
+  AnymouseApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub "anymouse-api-key-${Stage}"
+      Description: API Key for Anymouse service
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref AnymouseApi
+          StageName: !Ref Stage
+
+  AnymouseUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref AnymouseApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref AnymouseApiUsagePlan
+
+  AnymouseApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      UsagePlanName: !Sub "anymouse-usage-plan-${Stage}"
+      Description: Usage plan for Anymouse API
+      ApiStages:
+        - ApiId: !Ref AnymouseApi
+          Stage: !Ref Stage
+      Quota:
+        Limit: 10000
+        Period: MONTH
+      Throttle:
+        BurstLimit: 100
+        RateLimit: 50
+
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "anymouse-config-${Stage}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  ApiKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /anymouse/api-key
+      Type: SecureString
+      Value: !Ref AnymouseApiKey
+      Description: API key for Anymouse service
+
+Outputs:
+  AnymouseApi:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${AnymouseApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+
+  AnymouseApiKey:
+    Description: API Key for accessing the service
+    Value: !Ref AnymouseApiKey
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiKey"
+
+  ConfigBucket:
+    Description: S3 bucket for configuration files
+    Value: !Ref ConfigBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigBucket"
