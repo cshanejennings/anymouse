@@ -5,10 +5,12 @@ Description: Anymouse anonymization service
 Globals:
   Function:
     Timeout: 30
-    MemorySize: 512
+    MemorySize: 1024
     Environment:
       Variables:
         PYTHONPATH: /var/task
+        PYTHONDONTWRITEBYTECODE: 1
+        PYTHONUNBUFFERED: 1
 
 Parameters:
   Stage:
@@ -27,6 +29,20 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Enable AWS WAF for additional protection
+  
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 3008
+    Description: Lambda function memory size in MB (affects CPU allocation)
+    
+  ProvisionedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 100
+    Description: Number of Lambda instances to keep warm (0 = disabled)
 
 Resources:
   AnymouseFunction:
@@ -35,8 +51,15 @@ Resources:
       FunctionName: !Sub "anymouse-${Stage}"
       PackageType: Image
       ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/anymouse:latest"
+      MemorySize: !Ref LambdaMemorySize
       Architectures:
         - x86_64
+      ReservedConcurrencyLimit: 100
+      ProvisionedConcurrencyConfig:
+        !If
+          - HasProvisionedConcurrency
+          - ProvisionedConcurrencyUnits: !Ref ProvisionedConcurrency
+          - !Ref AWS::NoValue
       Events:
         AnonymizeApi:
           Type: Api
@@ -382,6 +405,7 @@ Resources:
 
 Conditions:
   EnableWAFCondition: !Equals [!Ref EnableWAF, "true"]
+  HasProvisionedConcurrency: !Not [!Equals [!Ref ProvisionedConcurrency, 0]]
 
 Outputs:
   AnymouseApi:

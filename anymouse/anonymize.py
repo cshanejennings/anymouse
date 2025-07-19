@@ -3,28 +3,36 @@ import re
 import copy
 import json
 
-try:
-    import spacy
-    from spacy.language import Language
-    from spacy.pipeline import EntityRuler
-    try:
-        _NLP = spacy.load("en_core_web_sm")
-        # Add EntityRuler before NER to override default detections
-        if "entity_ruler" not in _NLP.pipe_names:
-            ruler = _NLP.add_pipe("entity_ruler", before="ner")
-            patterns = [
-                {"label": "PERSON", "pattern": [{"TEXT": {"REGEX": r"^(Dr\.|Mr\.|Ms\.|Mrs\.)"}}, {"POS": "PROPN"}]},
-                {"label": "PERSON", "pattern": [{"TEXT": {"REGEX": r"^(Dr\.|Mr\.|Ms\.|Mrs\.)"}}, {"POS": "PROPN"}, {"POS": "PROPN"}]},
-                {"label": "ORG", "pattern": [{"TEXT": "Sunnybrook"}, {"TEXT": "Hospital"}]}
-            ]
-            ruler.add_patterns(patterns)
-        _SPACY_AVAILABLE = True
-    except Exception:
-        _SPACY_AVAILABLE = False
-        _NLP = None
-except ImportError:
-    _SPACY_AVAILABLE = False
-    _NLP = None
+# Global variables for lazy loading
+_NLP = None
+_SPACY_AVAILABLE = None
+
+def _get_nlp_model():
+    """Lazy load spaCy model to improve cold start performance."""
+    global _NLP, _SPACY_AVAILABLE
+    
+    if _SPACY_AVAILABLE is None:
+        try:
+            import spacy
+            from spacy.language import Language
+            from spacy.pipeline import EntityRuler
+            
+            _NLP = spacy.load("en_core_web_sm")
+            # Add EntityRuler before NER to override default detections
+            if "entity_ruler" not in _NLP.pipe_names:
+                ruler = _NLP.add_pipe("entity_ruler", before="ner")
+                patterns = [
+                    {"label": "PERSON", "pattern": [{"TEXT": {"REGEX": r"^(Dr\.|Mr\.|Ms\.|Mrs\.)"}}, {"POS": "PROPN"}]},
+                    {"label": "PERSON", "pattern": [{"TEXT": {"REGEX": r"^(Dr\.|Mr\.|Ms\.|Mrs\.)"}}, {"POS": "PROPN"}, {"POS": "PROPN"}]},
+                    {"label": "ORG", "pattern": [{"TEXT": "Sunnybrook"}, {"TEXT": "Hospital"}]}
+                ]
+                ruler.add_patterns(patterns)
+            _SPACY_AVAILABLE = True
+        except Exception:
+            _SPACY_AVAILABLE = False
+            _NLP = None
+    
+    return _NLP if _SPACY_AVAILABLE else None
 
 
 def anonymize_payload(payload: dict, config: dict) -> dict:
@@ -103,8 +111,9 @@ def anonymize_text(text: str) -> dict:
     """
     entity_types = ["PERSON", "ORG", "GPE", "DATE"]  # Supported types
     type_prefixes = {"PERSON": "name", "ORG": "org", "GPE": "loc", "DATE": "date"}
-    if _SPACY_AVAILABLE:
-        doc = _NLP(text)
+    nlp_model = _get_nlp_model()
+    if nlp_model:
+        doc = nlp_model(text)
         entities = [(ent.start_char, ent.end_char, ent.text, ent.label_) for ent in doc.ents if ent.label_ in entity_types]
     else:
         # Fallback to regex for PERSON only

@@ -1,0 +1,41 @@
+# Multi-stage build for optimized Lambda deployment
+FROM public.ecr.aws/lambda/python:3.9 AS base
+
+# Install system dependencies for spaCy
+RUN yum update -y && \
+    yum install -y gcc gcc-c++ && \
+    yum clean all
+
+FROM base AS builder
+
+# Install build dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt --target /opt/python
+
+# Download and optimize spaCy model
+RUN python -m spacy download en_core_web_sm
+RUN python -c "import spacy; nlp = spacy.load('en_core_web_sm'); nlp.to_disk('/opt/python/en_core_web_sm_optimized')"
+
+# Remove unnecessary components to reduce size
+RUN find /opt/python -name "*.pyc" -delete && \
+    find /opt/python -name "__pycache__" -type d -exec rm -rf {} + || true && \
+    find /opt/python -name "*.so" -exec strip {} \; || true
+
+FROM public.ecr.aws/lambda/python:3.9 AS runtime
+
+# Copy optimized dependencies
+COPY --from=builder /opt/python ${LAMBDA_TASK_ROOT}
+
+# Copy application code
+COPY anymouse/ ${LAMBDA_TASK_ROOT}/anymouse/
+
+# Set environment variables for optimization
+ENV PYTHONPATH="${LAMBDA_TASK_ROOT}"
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV SPACY_MODEL_PATH="${LAMBDA_TASK_ROOT}/en_core_web_sm_optimized"
+
+# Warm up imports (optional - adds to image size but improves cold start)
+RUN python -c "import boto3, json, re, copy, pydantic" || true
+
+CMD ["anymouse.lambda_handler.lambda_handler"]
