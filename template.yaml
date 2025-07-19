@@ -16,6 +16,17 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
     Description: Deployment stage
+  
+  AllowedIPs:
+    Type: CommaDelimitedList
+    Default: "0.0.0.0/0"
+    Description: Comma-delimited list of IP addresses/CIDR blocks allowed to access the API
+  
+  EnableWAF:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable AWS WAF for additional protection
 
 Resources:
   AnymouseFunction:
@@ -45,23 +56,82 @@ Resources:
             RestApiId: !Ref AnymouseApi
             Path: /config/test
             Method: post
+      Role: !GetAtt AnymouseLambdaRole.Arn
+
+  # Dedicated IAM role for Lambda with least privilege
+  AnymouseLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "anymouse-lambda-role-${Stage}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
       Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
-            - Effect: Allow
-              Action:
-                - ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/anymouse/*"
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-              Resource: !Sub "arn:aws:s3:::anymouse-config-${Stage}/*"
+        - PolicyName: AnymouseServicePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogsAccess
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/anymouse-${Stage}"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/anymouse-${Stage}:*"
+              - Sid: SSMParameterAccess
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/anymouse/*"
+              - Sid: S3ConfigAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::anymouse-config-${Stage}/*"
+              - Sid: S3BucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::anymouse-config-${Stage}"
+
+  # API Gateway execution role
+  ApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "anymouse-apigateway-role-${Stage}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApiGatewayCloudWatchPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/anymouse-${Stage}*"
 
   AnymouseApi:
     Type: AWS::Serverless::Api
@@ -83,6 +153,34 @@ Resources:
           Throttle:
             BurstLimit: 100
             RateLimit: 50
+        ResourcePolicy:
+          IpRangeWhitelist: !Ref AllowedIPs
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: !Sub |
+          {
+            "requestId": "$context.requestId",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "path": "$context.path",
+            "status": "$context.status",
+            "responseLength": "$context.responseLength",
+            "responseTime": "$context.responseTime",
+            "sourceIp": "$context.identity.sourceIp",
+            "userAgent": "$context.identity.userAgent",
+            "error": "$context.error.message",
+            "integrationError": "$context.integration.error"
+          }
+      TracingConfig:
+        TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: false
+          MetricsEnabled: true
+          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 100
 
   AnymouseApiKey:
     Type: AWS::ApiGateway::ApiKey
@@ -136,6 +234,155 @@ Resources:
       Value: !Ref AnymouseApiKey
       Description: API key for Anymouse service
 
+  # CloudWatch Log Groups
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/anymouse-${Stage}"
+      RetentionInDays: 30
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/anymouse-${Stage}"
+      RetentionInDays: 30
+
+  # WAF Web ACL (conditional)
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Condition: EnableWAFCondition
+    Properties:
+      Name: !Sub "anymouse-waf-${Stage}"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSet
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+
+  WebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: EnableWAFCondition
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${AnymouseApi}/stages/${Stage}"
+      WebACLArn: !GetAtt WebAcl.Arn
+
+  # CloudWatch Alarms
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "anymouse-${Stage}-high-error-rate"
+      AlarmDescription: High error rate detected for Anymouse API
+      MetricName: 4XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "anymouse-api-${Stage}"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  ServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "anymouse-${Stage}-server-errors"
+      AlarmDescription: Server errors detected for Anymouse API
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "anymouse-api-${Stage}"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "anymouse-${Stage}-lambda-errors"
+      AlarmDescription: Lambda function errors detected
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "anymouse-${Stage}"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  AuthFailureMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LambdaLogGroup
+      FilterPattern: "[timestamp, requestId, level=\"INFO\", action=\"auth_check\", status=\"401\", source_ip]"
+      MetricTransformations:
+        - MetricNamespace: Anymouse
+          MetricName: AuthenticationFailures
+          MetricValue: "1"
+          DefaultValue: 0
+
+  AuthFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "anymouse-${Stage}-auth-failures"
+      AlarmDescription: High number of authentication failures detected
+      MetricName: AuthenticationFailures
+      Namespace: Anymouse
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "anymouse-alerts-${Stage}"
+      DisplayName: !Sub "Anymouse ${Stage} Alerts"
+
+Conditions:
+  EnableWAFCondition: !Equals [!Ref EnableWAF, "true"]
+
 Outputs:
   AnymouseApi:
     Description: API Gateway endpoint URL
@@ -154,3 +401,9 @@ Outputs:
     Value: !Ref ConfigBucket
     Export:
       Name: !Sub "${AWS::StackName}-ConfigBucket"
+
+  AlertTopicArn:
+    Description: SNS Topic ARN for alerts
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-AlertTopic"

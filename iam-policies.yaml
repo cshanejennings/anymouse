@@ -1,0 +1,209 @@
+# IAM Policies for Anymouse Service
+# These can be imported into organizations or used as reference
+
+LambdaExecutionPolicy:
+  Version: '2012-10-17'
+  Statement:
+    # Basic Lambda execution
+    - Sid: BasicLambdaExecution
+      Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: 
+        - 'arn:aws:logs:*:*:log-group:/aws/lambda/anymouse-*'
+        - 'arn:aws:logs:*:*:log-group:/aws/lambda/anymouse-*:*'
+    
+    # SSM Parameter access for API keys
+    - Sid: SSMParameterAccess
+      Effect: Allow
+      Action:
+        - ssm:GetParameter
+        - ssm:GetParameters
+      Resource: 'arn:aws:ssm:*:*:parameter/anymouse/*'
+    
+    # S3 access for configuration
+    - Sid: S3ConfigAccess
+      Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:GetObjectVersion
+      Resource: 'arn:aws:s3:::anymouse-config-*/*'
+    
+    # X-Ray tracing
+    - Sid: XRayTracing
+      Effect: Allow
+      Action:
+        - xray:PutTraceSegments
+        - xray:PutTelemetryRecords
+      Resource: '*'
+
+ApiGatewayCloudWatchPolicy:
+  Version: '2012-10-17'
+  Statement:
+    - Sid: CloudWatchLogsAccess
+      Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:DescribeLogGroups
+        - logs:DescribeLogStreams
+        - logs:PutLogEvents
+        - logs:GetLogEvents
+        - logs:FilterLogEvents
+      Resource: 'arn:aws:logs:*:*:log-group:/aws/apigateway/anymouse-*'
+
+# Policy for CI/CD deployment role
+DeploymentPolicy:
+  Version: '2012-10-17'
+  Statement:
+    # CloudFormation permissions
+    - Sid: CloudFormationAccess
+      Effect: Allow
+      Action:
+        - cloudformation:CreateStack
+        - cloudformation:UpdateStack
+        - cloudformation:DeleteStack
+        - cloudformation:DescribeStacks
+        - cloudformation:DescribeStackEvents
+        - cloudformation:DescribeStackResources
+        - cloudformation:GetTemplate
+        - cloudformation:ValidateTemplate
+        - cloudformation:CreateChangeSet
+        - cloudformation:DescribeChangeSet
+        - cloudformation:ExecuteChangeSet
+        - cloudformation:DeleteChangeSet
+      Resource: 'arn:aws:cloudformation:*:*:stack/anymouse-*'
+    
+    # IAM permissions for creating roles
+    - Sid: IAMRoleManagement
+      Effect: Allow
+      Action:
+        - iam:CreateRole
+        - iam:DeleteRole
+        - iam:GetRole
+        - iam:PassRole
+        - iam:AttachRolePolicy
+        - iam:DetachRolePolicy
+        - iam:PutRolePolicy
+        - iam:DeleteRolePolicy
+        - iam:GetRolePolicy
+        - iam:ListRolePolicies
+        - iam:TagRole
+        - iam:UntagRole
+      Resource: 
+        - 'arn:aws:iam::*:role/anymouse-*'
+        - 'arn:aws:iam::*:role/*-AnymouseFunction-*'
+    
+    # Lambda function management
+    - Sid: LambdaManagement
+      Effect: Allow
+      Action:
+        - lambda:CreateFunction
+        - lambda:DeleteFunction
+        - lambda:GetFunction
+        - lambda:GetFunctionConfiguration
+        - lambda:UpdateFunctionCode
+        - lambda:UpdateFunctionConfiguration
+        - lambda:ListTags
+        - lambda:TagResource
+        - lambda:UntagResource
+        - lambda:AddPermission
+        - lambda:RemovePermission
+        - lambda:GetPolicy
+      Resource: 'arn:aws:lambda:*:*:function:anymouse-*'
+    
+    # API Gateway management
+    - Sid: ApiGatewayManagement
+      Effect: Allow
+      Action:
+        - apigateway:*
+      Resource: 
+        - 'arn:aws:apigateway:*::/restapis'
+        - 'arn:aws:apigateway:*::/restapis/*'
+        - 'arn:aws:apigateway:*::/apikeys'
+        - 'arn:aws:apigateway:*::/apikeys/*'
+        - 'arn:aws:apigateway:*::/usageplans'
+        - 'arn:aws:apigateway:*::/usageplans/*'
+    
+    # S3 bucket management
+    - Sid: S3BucketManagement
+      Effect: Allow
+      Action:
+        - s3:CreateBucket
+        - s3:DeleteBucket
+        - s3:GetBucketLocation
+        - s3:GetBucketVersioning
+        - s3:PutBucketVersioning
+        - s3:GetBucketAcl
+        - s3:PutBucketAcl
+        - s3:GetBucketPolicy
+        - s3:PutBucketPolicy
+        - s3:DeleteBucketPolicy
+        - s3:GetBucketPublicAccessBlock
+        - s3:PutBucketPublicAccessBlock
+        - s3:GetBucketTagging
+        - s3:PutBucketTagging
+      Resource: 'arn:aws:s3:::anymouse-config-*'
+    
+    # SSM Parameter management
+    - Sid: SSMParameterManagement
+      Effect: Allow
+      Action:
+        - ssm:PutParameter
+        - ssm:GetParameter
+        - ssm:DeleteParameter
+        - ssm:DescribeParameters
+        - ssm:GetParameters
+        - ssm:AddTagsToResource
+        - ssm:RemoveTagsFromResource
+      Resource: 'arn:aws:ssm:*:*:parameter/anymouse/*'
+    
+    # CloudWatch Logs management
+    - Sid: CloudWatchLogsManagement
+      Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:DeleteLogGroup
+        - logs:DescribeLogGroups
+        - logs:PutRetentionPolicy
+        - logs:DeleteRetentionPolicy
+        - logs:TagLogGroup
+        - logs:UntagLogGroup
+      Resource: 
+        - 'arn:aws:logs:*:*:log-group:/aws/lambda/anymouse-*'
+        - 'arn:aws:logs:*:*:log-group:/aws/apigateway/anymouse-*'
+    
+    # ECR access for container images
+    - Sid: ECRAccess
+      Effect: Allow
+      Action:
+        - ecr:GetAuthorizationToken
+        - ecr:BatchCheckLayerAvailability
+        - ecr:GetDownloadUrlForLayer
+        - ecr:BatchGetImage
+        - ecr:CreateRepository
+        - ecr:DescribeRepositories
+        - ecr:PutImage
+        - ecr:InitiateLayerUpload
+        - ecr:UploadLayerPart
+        - ecr:CompleteLayerUpload
+      Resource: 
+        - 'arn:aws:ecr:*:*:repository/anymouse'
+        - '*'  # GetAuthorizationToken requires *
+    
+    # WAF management (if enabled)
+    - Sid: WAFManagement
+      Effect: Allow
+      Action:
+        - wafv2:CreateWebACL
+        - wafv2:DeleteWebACL
+        - wafv2:GetWebACL
+        - wafv2:UpdateWebACL
+        - wafv2:AssociateWebACL
+        - wafv2:DisassociateWebACL
+        - wafv2:ListWebACLs
+        - wafv2:TagResource
+        - wafv2:UntagResource
+      Resource: 'arn:aws:wafv2:*:*:regional/webacl/anymouse-*'
