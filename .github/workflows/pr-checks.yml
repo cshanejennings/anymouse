@@ -1,0 +1,239 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-format:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black isort flake8 mypy bandit
+        pip install -r requirements.txt
+    
+    - name: Check code formatting with Black
+      run: black --check --diff anymouse/ tests/
+    
+    - name: Check import sorting with isort
+      run: isort --check-only --diff anymouse/ tests/
+    
+    - name: Lint with flake8
+      run: flake8 anymouse/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+    
+    - name: Type check with mypy
+      run: mypy anymouse/ --ignore-missing-imports --no-strict-optional
+    
+    - name: Security check with bandit
+      run: bandit -r anymouse/ -ll
+
+  test-coverage:
+    name: Test Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install coverage pytest-cov
+        python -m spacy download en_core_web_sm
+    
+    - name: Run tests with coverage
+      run: |
+        python -m pytest tests/ \
+          --cov=anymouse \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-fail-under=80 \
+          -v
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+    
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report
+        path: htmlcov/
+
+  validate-infrastructure:
+    name: Validate Infrastructure
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup SAM CLI
+      uses: aws-actions/setup-sam@v2
+      with:
+        use-installer: true
+    
+    - name: Validate SAM template
+      run: sam validate --template-file template.yaml
+    
+    - name: Run cfn-lint
+      run: |
+        pip install cfn-lint
+        cfn-lint template.yaml
+    
+    - name: Check for CloudFormation drift
+      run: |
+        # Install checkov for infrastructure security scanning
+        pip install checkov
+        checkov -f template.yaml --framework cloudformation
+
+  check-dependencies:
+    name: Check Dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Check for security vulnerabilities
+      run: |
+        pip install safety pip-audit
+        safety check -r requirements.txt
+        pip-audit -r requirements.txt
+    
+    - name: Check for outdated packages
+      run: |
+        pip install pip-outdated
+        pip install -r requirements.txt
+        pip list --outdated
+
+  build-test:
+    name: Test Docker Build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.optimized
+        push: false
+        tags: anymouse:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Test container functionality
+      run: |
+        # Build and test the container
+        docker build -f Dockerfile.optimized -t anymouse:test .
+        
+        # Basic smoke test - check if imports work
+        docker run --rm anymouse:test python -c "
+        import anymouse.lambda_handler
+        import anymouse.anonymize
+        import anymouse.deanonymize
+        import anymouse.config
+        print('✅ All imports successful')
+        "
+
+  pr-summary:
+    name: PR Summary
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, test-coverage, validate-infrastructure, check-dependencies, build-test]
+    if: always()
+    
+    steps:
+    - name: PR Summary Comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const jobs = [
+            { name: 'Lint and Format', status: '${{ needs.lint-and-format.result }}' },
+            { name: 'Test Coverage', status: '${{ needs.test-coverage.result }}' },
+            { name: 'Infrastructure Validation', status: '${{ needs.validate-infrastructure.result }}' },
+            { name: 'Dependency Check', status: '${{ needs.check-dependencies.result }}' },
+            { name: 'Docker Build Test', status: '${{ needs.build-test.result }}' }
+          ];
+          
+          const getEmoji = (status) => {
+            switch(status) {
+              case 'success': return '✅';
+              case 'failure': return '❌';
+              case 'cancelled': return '⏹️';
+              default: return '⚠️';
+            }
+          };
+          
+          const summary = jobs.map(job => 
+            `${getEmoji(job.status)} **${job.name}**: ${job.status}`
+          ).join('\n');
+          
+          const allPassed = jobs.every(job => job.status === 'success');
+          const header = allPassed 
+            ? '🎉 All checks passed! This PR is ready for review.' 
+            : '⚠️ Some checks failed. Please review and fix issues.';
+          
+          const body = `## PR Check Summary\n\n${header}\n\n${summary}`;
+          
+          // Find existing comment
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number
+          });
+          
+          const existingComment = comments.data.find(
+            comment => comment.body.includes('PR Check Summary')
+          );
+          
+          if (existingComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: body
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
